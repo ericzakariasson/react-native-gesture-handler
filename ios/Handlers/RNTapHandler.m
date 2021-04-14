@@ -26,6 +26,7 @@
 @property (nonatomic) CGFloat maxDeltaX;
 @property (nonatomic) CGFloat maxDeltaY;
 @property (nonatomic) NSInteger minPointers;
+@property (nonatomic) CGFloat touchRadius;
 
 - (id)initWithGestureHandler:(RNGestureHandler*)gestureHandler;
 
@@ -36,6 +37,7 @@
   NSUInteger _tapsSoFar;
   CGPoint _initPosition;
   NSInteger _maxNumberOfTouches;
+  CGFloat _touchRadius;
 }
 
 - (id)initWithGestureHandler:(RNGestureHandler*)gestureHandler
@@ -50,6 +52,7 @@
     _maxDeltaX = NAN;
     _maxDeltaY = NAN;
     _maxDistSq = NAN;
+    _touchRadius = NAN;
   }
   return self;
 }
@@ -74,6 +77,12 @@
   if (_tapsSoFar) {
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(cancel) object:nil];
   }
+    
+  UITouch *touch = [touches anyObject];
+  _touchRadius = touch.majorRadius;
+      
+  [self _beginObservingTouchMajorRadius:touch];
+    
   NSInteger numberOfTouches = [touches count];
   if (numberOfTouches > _maxNumberOfTouches) {
     _maxNumberOfTouches = numberOfTouches;
@@ -98,6 +107,9 @@
   }
   
   if ([self shouldFailUnderCustomCriteria]) {
+    UITouch *touch = [touches anyObject];
+    [self _endObservingTouchMajorRadius:touch];
+      
     self.state = UIGestureRecognizerStateFailed;
     [self triggerAction];
     [self reset];
@@ -106,6 +118,31 @@
   
   self.state = UIGestureRecognizerStatePossible;
   [self triggerAction];
+}
+
+- (void)_beginObservingTouchMajorRadius:(UITouch *)touch {
+  // Observe UITouch -majorRadius changes.
+  [touch addObserver:self
+          forKeyPath:NSStringFromSelector(@selector(majorRadius))
+             options:NSKeyValueObservingOptionInitial | NSKeyValueObservingOptionNew
+             context:NULL];
+}
+
+- (void)_endObservingTouchMajorRadius:(UITouch *)touch {
+  @try {
+    [touch removeObserver:self
+               forKeyPath:NSStringFromSelector(@selector(majorRadius))
+                  context:NULL];
+  } @catch (NSException *e) { }
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary<NSString *,id> *)change context:(void *)context
+{
+  // Anytime -majorRadius changes, indicate that the gesture's state has changed.
+  if ([keyPath isEqualToString:NSStringFromSelector(@selector(majorRadius))]) {
+    self.state = UIGestureRecognizerStateChanged;
+    _touchRadius = [(UITouch *)object majorRadius];
+  }
 }
 
 - (CGPoint)translationInView {
@@ -139,6 +176,8 @@
   [super touchesEnded:touches withEvent:event];
   if (_numberOfTaps == _tapsSoFar && _maxNumberOfTouches >= _minPointers) {
     self.state = UIGestureRecognizerStateEnded;
+    UITouch *touch = [touches anyObject];
+    [self _endObservingTouchMajorRadius:touch];
     [self reset];
   } else {
     [self performSelector:@selector(cancel) withObject:nil afterDelay:_maxDelay];
@@ -148,6 +187,10 @@
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
 {
   [super touchesCancelled:touches withEvent:event];
+    
+  UITouch *touch = [touches anyObject];
+  [self _endObservingTouchMajorRadius:touch];
+  
   self.state = UIGestureRecognizerStateCancelled;
   [self reset];
 }
@@ -187,6 +230,7 @@
   APPLY_INT_PROP(minPointers);
   APPLY_FLOAT_PROP(maxDeltaX);
   APPLY_FLOAT_PROP(maxDeltaY);
+  APPLY_FLOAT_PROP(touchRadius);
   
   id prop = config[@"maxDelayMs"];
   if (prop != nil) {
@@ -205,12 +249,17 @@
   }
 }
 
-- (RNGestureHandlerEventExtraData *)eventExtraData:(UIGestureRecognizer *)recognizer{
+- (RNGestureHandlerEventExtraData *)eventExtraData:(RNBetterTapGestureRecognizer *)recognizer{
     if (recognizer.state == UIGestureRecognizerStateEnded) {
         return _lastData;
     }
     
-    _lastData = [super eventExtraData:recognizer];
+    _lastData = [RNGestureHandlerEventExtraData
+                 forPosition:[recognizer locationInView:recognizer.view]
+                 withAbsolutePosition:[recognizer locationInView:recognizer.view.window]
+                 withNumberOfTouches:recognizer.numberOfTouches
+                 withTouchRadius: recognizer.touchRadius];
+    
     return _lastData;
 }
 

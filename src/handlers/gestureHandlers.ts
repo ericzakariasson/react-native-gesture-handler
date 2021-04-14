@@ -93,6 +93,7 @@ export type TapGestureHandlerEventPayload = {
   y: number;
   absoluteX: number;
   absoluteY: number;
+  touchRadius: number;
 };
 
 export interface TapGestureHandlerProps
